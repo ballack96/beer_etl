@@ -1,0 +1,37 @@
+# Airflow specific
+airflow.cfg
+airflow.db
+airflow-webserver.pid
+logs/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+
+# Database
+*.db
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+config/
+secrets/
+*.key
+*.pem
+
+# Others
+beer_etl_pipeline_test.ipynb
