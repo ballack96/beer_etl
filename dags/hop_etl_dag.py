@@ -34,7 +34,7 @@ def extract_transform_load():
     df.columns = [col.lower().replace(" ", "_") for col in df.columns]
 
     # Load into DuckDB
-    con = duckdb.connect(DB_PATH)
+    con = duckdb.connect(DUCKDB_PATH)
     con.execute(f"CREATE OR REPLACE TABLE {TABLE_NAME} AS SELECT * FROM df")
     con.close()
 
