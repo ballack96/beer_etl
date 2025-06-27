@@ -30,7 +30,8 @@ def extract_beer_data():
 
         page += 1
 
-    output_path = Path("beer_etl_project/include/data/raw")
+    # Fixed path - removed "beer_etl_project/" prefix
+    output_path = Path("include/data/raw")
     output_path.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = output_path / f"catalog_breweries_{timestamp}.json"

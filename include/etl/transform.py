@@ -4,8 +4,9 @@ from datetime import datetime
 from textblob import TextBlob
 
 def transform_beer_data():
-    raw_path = Path("beer_etl_project/include/data/raw")
-    processed_path = Path("beer_etl_project/include/data/processed")
+    # Fixed paths - removed "beer_etl_project/" prefix
+    raw_path = Path("include/data/raw")
+    processed_path = Path("include/data/processed")
     processed_path.mkdir(parents=True, exist_ok=True)
 
     json_files = sorted(raw_path.glob("beer_styles_*.json"), reverse=True)
