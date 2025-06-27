@@ -15,7 +15,7 @@ default_args = {
 }
 
 # Path to DuckDB file
-DUCKDB_PATH = os.path.join(os.path.dirname(__file__), "../data/hops.duckdb")
+DUCKDB_PATH = os.path.join(os.path.dirname(__file__), "../data/ingredients.duckdb")
 TABLE_NAME = "hops"
 
 def extract_transform_load():

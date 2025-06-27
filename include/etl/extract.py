@@ -49,7 +49,7 @@ LIST_URL = f"{BASE_URL}/hops/"
 SEM_LIMIT = 10
 
 def fetch_hop_links():
-    """Scrape hop name, origin, purpose, and detail URL from beermaverick.com/hops"""
+    """Scrape hop name, origin, purpose, and full URL from beermaverick.com/hops"""
     import requests
     res = requests.get(LIST_URL)
     soup = BeautifulSoup(res.text, "html.parser")
@@ -66,7 +66,8 @@ def fetch_hop_links():
             if len(cols) == 2:
                 a_tag = cols[0].find("a")
                 name = a_tag.get_text(strip=True)
-                url = a_tag["href"]
+                href = a_tag["href"].strip()
+                url = href if href.startswith("http") else f"{BASE_URL}{href}"
                 purpose = cols[1].get_text(strip=True)
                 hops.append({
                     "name": name,
@@ -175,4 +176,11 @@ async def fetch_hops_data_async(sleep_interval=0.0):
 
 
 def fetch_hops_data():
-    return asyncio.run(fetch_hops_data_async())
+    try:
+        return asyncio.run(fetch_hops_data_async())
+    except RuntimeError as e:
+        if "asyncio.run() cannot be called" in str(e):
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(fetch_hops_data_async())
+        else:
+            raise

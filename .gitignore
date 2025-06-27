@@ -16,6 +16,7 @@ venv/
 # Database
 *.db
 *.sqlite3
+*.duckdb
 
 # IDE
 .vscode/
@@ -35,4 +36,4 @@ secrets/
 
 # Others
 beer_etl_pipeline_test.ipynb
-dags_bak/
+dags_bak/s
