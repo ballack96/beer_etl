@@ -5,3 +5,5 @@ requests
 beautifulsoup4
 textblob
 geopy
+aiohttp 
+nest_asyncio
