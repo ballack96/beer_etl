@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 from textblob import TextBlob
+import pandas as pd
+import re
 
 def transform_beer_data():
     # Fixed paths - removed "beer_etl_project/" prefix
@@ -37,3 +39,103 @@ def transform_beer_data():
         json.dump(transformed, f, indent=2)
 
     print(f"Transformed {len(transformed)} records saved to {output_file}")
+
+######################################################
+## Transform hop data from https://beermaverick.com ##
+######################################################
+def extract_numeric_range_avg(value):
+    """
+    Extract min, max, avg values from strings like:
+    "10-14% 12% avg" or "0.8-3.9 mL 2.4mL avg"
+    Returns: tuple of (min, max, avg) as floats or None
+    """
+    if pd.isna(value) or not isinstance(value, str):
+        return None, None, None
+
+    # Remove units and lowercase
+    value = value.replace('%', '').replace('mL', '').lower()
+    
+    # Match patterns
+    range_match = re.search(r'(\d+(\.\d+)?)[\s-]+(\d+(\.\d+)?)', value)
+    avg_match = re.search(r'(\d+(\.\d+)?)[\s]*avg', value)
+
+    val_min = float(range_match.group(1)) if range_match else None
+    val_max = float(range_match.group(3)) if range_match else None
+    val_avg = float(avg_match.group(1)) if avg_match else None
+
+    return val_min, val_max, val_avg
+
+
+def transform_hop_data(df):
+    """
+    Transforms raw hop data extracted from BeerMaverick into structured form.
+    """
+    df = df.copy()
+    
+    # Columns to extract ranges and averages from
+    range_cols = [
+        'alpha_acid', 'beta_acid', 'cohumulone', 'total_oil',
+        'myrcene', 'humulene', 'caryophyllene', 'farnesene', 'others_oil'
+    ]
+
+    for col in range_cols:
+        df[[f"{col}_min", f"{col}_max", f"{col}_avg"]] = df[col].apply(
+            lambda x: pd.Series(extract_numeric_range_avg(x))
+        )
+
+    # Drop original raw columns if needed
+    # df.drop(columns=range_cols, inplace=True)
+
+    # Normalize unknowns and blanks
+    df.replace("Unknown", None, inplace=True)
+    df.replace("", None, inplace=True)
+    return df
+
+
+###############################################################
+## Transform fermentables data from https://beermaverick.com ##
+###############################################################
+def transform_fermentables_data(df):
+    """
+    Transforms raw fermentables data into clean schema
+    """
+    df = df.copy()
+
+    def extract_pct(val):
+        if pd.isna(val):
+            return None
+        match = re.search(r'(\d{1,3}(\.\d+)?)%', val)
+        return float(match.group(1)) if match else None
+
+    def extract_srm(val):
+        if pd.isna(val):
+            return None
+        match = re.search(r'(\d+(\.\d+)?)', val)
+        return float(match.group(1)) if match else None
+
+    def extract_ppg(val):
+        if pd.isna(val):
+            return None
+        match = re.search(r'(\d{2})\s*ppg', val, re.IGNORECASE)
+        return int(match.group(1)) if match else None
+
+    def extract_dpower(val):
+        if pd.isna(val):
+            return None
+        match = re.search(r'(\d+(\.\d+)?)\s*°?\s*lintner', val, re.IGNORECASE)
+        return float(match.group(1)) if match else None
+
+    df['yield_pct'] = df['potential_yield'].apply(extract_pct) if 'potential_yield' in df else None
+    df['ppg'] = df['potential_yield'].apply(extract_ppg) if 'potential_yield' in df else None
+    df['max_usage_pct'] = df['max_usage'].apply(extract_pct) if 'max_usage' in df else None
+    df['srm'] = df['srm'].apply(extract_srm) if 'srm' in df else None
+    df['diastatic_power'] = df['diastatic_power'].apply(extract_dpower) if 'diastatic_power' in df else None
+
+    df.replace("Unknown", None, inplace=True)
+    df.replace("", None, inplace=True)
+
+    return df
+
+
+
+

@@ -1,12 +1,12 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from datetime import datetime
-import os
 import pandas as pd
-import duckdb
 
+# Saved modules
 from include.etl.extract import fetch_hops_data
-
+from include.etl.load import load_hops_to_duckdb
+from include.etl.transform import transform_hop_data
 
 default_args = {
     'owner': 'airflow',
@@ -14,32 +14,28 @@ default_args = {
     'retries': 1,
 }
 
-# Path to DuckDB file
-DUCKDB_PATH = os.path.join(os.path.dirname(__file__), "../data/ingredients.duckdb")
-TABLE_NAME = "hops"
-
-def extract_transform_load():
+def extract_hops(**context):
     print("🔄 Extracting hop data...")
     df = fetch_hops_data()
-
     if df.empty:
         raise ValueError("❌ DataFrame is empty. Extraction failed or site changed.")
+    print(f"✅ Extracted {len(df)} hops")
+    context['ti'].xcom_push(key='raw_hops_df', value=df.to_dict(orient='records'))
 
-    print(f"✅ Extracted {len(df)} rows.")
+def transform_hops(**context):
+    print("🧪 Transforming hop data...")
+    raw_dict = context['ti'].xcom_pull(task_ids='extract_hops', key='raw_hops_df')
+    df = pd.DataFrame(raw_dict)
+    df = transform_hop_data(df)
+    print(f"✅ Transformed {len(df)} hops")
+    context['ti'].xcom_push(key='clean_hops_df', value=df.to_dict(orient='records'))
 
-    # Optional: Replace empty strings with None
-    df.replace("", None, inplace=True)
-
-    # Optional: Convert column names to snake_case
-    df.columns = [col.lower().replace(" ", "_") for col in df.columns]
-
-    # Load into DuckDB
-    con = duckdb.connect(DUCKDB_PATH)
-    con.execute(f"CREATE OR REPLACE TABLE {TABLE_NAME} AS SELECT * FROM df")
-    con.close()
-
-    print(f"✅ Loaded data into DuckDB table: {TABLE_NAME}")
-
+def load_hops(**context):
+    print("💾 Loading hops to DuckDB...")
+    clean_dict = context['ti'].xcom_pull(task_ids='transform_hops', key='clean_hops_df')
+    df = pd.DataFrame(clean_dict)
+    load_hops_to_duckdb(df)
+    print("✅ Done loading to DuckDB.")
 
 with DAG(
     dag_id="hop_etl_dag",
@@ -49,9 +45,22 @@ with DAG(
     tags=["hops", "etl", "duckdb"],
 ) as dag:
 
-    etl_task = PythonOperator(
-        task_id="extract_transform_load_hops",
-        python_callable=extract_transform_load,
+    t1 = PythonOperator(
+        task_id="extract_hops",
+        python_callable=extract_hops,
+        provide_context=True,
     )
 
-    etl_task
+    t2 = PythonOperator(
+        task_id="transform_hops",
+        python_callable=transform_hops,
+        provide_context=True,
+    )
+
+    t3 = PythonOperator(
+        task_id="load_hops",
+        python_callable=load_hops,
+        provide_context=True,
+    )
+
+    t1 >> t2 >> t3
