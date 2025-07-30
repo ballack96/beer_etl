@@ -137,5 +137,28 @@ def transform_fermentables_data(df):
     return df
 
 
+######################################################### 
+## Transform yeasts data from https://beermaverick.com ##
+######################################################### 
+def transform_yeast_data(df):
+    """
+    Transforms raw yeast data into clean schema
+    """
+    df = df.copy()
 
+    def extract_abv_range(val):
+        if pd.isna(val):
+            return None, None
+        match = re.search(r'(\d+(\.\d+)?)\s*-\s*(\d+(\.\d+)?)\s*%', val)
+        if match:
+            return float(match.group(1)), float(match.group(3))
+        return None, None
 
+    df[['min_abv', 'max_abv']] = df['abv'].apply(
+        lambda x: pd.Series(extract_abv_range(x))
+    )
+
+    df.replace("Unknown", None, inplace=True)
+    df.replace("", None, inplace=True)
+
+    return df

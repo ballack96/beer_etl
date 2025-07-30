@@ -271,3 +271,85 @@ async def fetch_fermentables_async():
 
 def fetch_fermentables():
     return asyncio.run(fetch_fermentables_async())
+
+
+#########################################################
+## Scrape yeasts data from https://beermaverick.com    ##
+#########################################################
+YEASTS_URL = f"{BASE_URL}/yeasts/"
+def fetch_yeasts_list():
+    """Scrape yeast name, type, and URL from the yeast listing table."""
+    import requests
+    res = requests.get(YEASTS_URL)
+    soup = BeautifulSoup(res.text, "html.parser")
+
+    data = []
+    table = soup.find("table")
+    if not table:
+        raise ValueError("Yeasts table not found")
+
+    current_type = None
+    for row in table.find_all("tr"):
+        th = row.find("th")
+        td = row.find("td")
+
+        if th:
+            current_type = th.get_text(strip=True)
+        elif td:
+            a_tag = td.find("a")
+            if a_tag:
+                name = a_tag.get_text(strip=True)
+                href = a_tag.get("href").strip()
+                url = href if href.startswith("http") else f"https://beermaverick.com{href}"
+                data.append({
+                    "name": name,
+                    "url": url,
+                    "type": current_type
+                })
+    return data
+
+async def fetch_yeast_detail(row, session, semaphore):
+    async with semaphore:
+        if not isinstance(row, dict):
+            print(f"⚠️ Expected dict, got: {type(row)} → {row}")
+            return {}
+
+        try:
+            print(f"⏳ Fetching: {row['url']}")
+            async with session.get(row["url"]) as response:
+                html = await response.text()
+                soup = BeautifulSoup(html, "html.parser")
+
+                table = soup.find("table", class_="brewvalues")
+                if not table:
+                    return row
+
+                for tr in table.find_all("tr"):
+                    th = tr.find("th")
+                    td = tr.find("td")
+                    if not th or not td:
+                        continue
+                    label = th.get_text(strip=True).lower()
+                    value = td.get_text(strip=True)
+
+                    if "attenuation" in label:
+                        row["attenuation"] = value
+                    elif "flocculation" in label:
+                        row["flocculation"] = value
+                    elif "alcohol tolerance" in label:
+                        row["alcohol_tolerance"] = value
+        except Exception as e:
+            print(f"❌ Error fetching {row.get('url', 'unknown')}: {e}")
+        return row
+    
+async def fetch_yeasts_async():
+    rows = fetch_yeasts_list()
+    assert isinstance(rows[0], dict), f"Expected dict rows, got {type(rows[0])}"
+    semaphore = asyncio.Semaphore(SEM_LIMIT)
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_yeast_detail(row, session, semaphore) for row in rows]
+        enriched = await asyncio.gather(*tasks)
+    return pd.DataFrame(enriched)
+
+def fetch_yeasts_data():
+    return asyncio.run(fetch_yeasts_async())

@@ -95,7 +95,30 @@ def load_hops_to_duckdb(df, table_name="hops"):
 ######################################################
 ## Load hop data from https://beermaverick.com      ##
 ######################################################
-def load_hops_to_duckdb(df, table_name="fermentables"):
+def load_fermentables_to_duckdb(df, table_name="fermentables"):
+    """
+    Loads DataFrame into DuckDB after dropping existing table.
+    """
+    db_path = os.path.abspath(os.path.join(os.getcwd(), "include/data/ingredients.duckdb"))
+
+    # Ensure target directory exists
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+    con = duckdb.connect(db_path)
+
+    # Drop the table if it exists
+    con.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+    # Recreate and load data
+    con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df")
+
+    con.close()
+    print(f"✅ Loaded {len(df)} rows into fresh '{table_name}' table at {db_path}")
+
+#########################################################
+## Load yeasts data from https://beermaverick.com      ##
+#########################################################
+def load_yeasts_to_duckdb(df, table_name="yeasts"):
     """
     Loads DataFrame into DuckDB after dropping existing table.
     """
