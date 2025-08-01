@@ -42,7 +42,7 @@ with DAG(
     default_args=default_args,
     schedule_interval=None,
     catchup=False,
-    tags=["hops", "etl", "duckdb"],
+    tags=["hops", "etl", "motherduck"],
 ) as dag:
 
     t1 = PythonOperator(

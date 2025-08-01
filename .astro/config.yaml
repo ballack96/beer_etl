@@ -1,2 +1,5 @@
 project:
     name: beer-etl
+    mounts:
+        - source: ./inlcude/data
+          target: data

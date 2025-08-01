@@ -42,6 +42,23 @@ def extract_beer_data():
     print(f"✅ Extracted {len(breweries)} breweries from catalog.beer to {output_file}")
 
 ######################################################
+## Beer style data from BJCP                        ##
+######################################################
+STYLES_URL = "https://raw.githubusercontent.com/ascholer/bjcp-styleview/main/styles.json"
+
+def fetch_styles() -> pd.DataFrame:
+    """
+    Fetches the BJCP beer styles JSON and normalizes into a flat DataFrame.
+    """
+    resp = requests.get(url=STYLES_URL)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Normalize nested JSON into flat table
+    df_styles = pd.json_normalize(data)
+    return df_styles
+
+######################################################
 ## Scrape hop data from https://beermaverick.com    ##
 ######################################################
 BASE_URL = "https://beermaverick.com"

@@ -4,6 +4,7 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 import os
+from airflow.models import Variable
 
 def load_to_duckdb():
     """Load transformed beer data to DuckDB"""
@@ -67,53 +68,70 @@ def load_to_duckdb_original():
 
     print(f"Loaded {len(df)} records into DuckDB and saved Parquet at {parquet_file}")
 
+######################################################
+## Load styles data from BJCP                       ##
+######################################################
+def load_styles_to_duckdb(df, table_name="beer_styles"):
+    """
+    Loads the transformed styles DataFrame into DuckDB Cloud via MotherDuck.
+    Uses the MOTHERDUCK_TOKEN stored in Airflow Variables.
+    """
+    # fetch token from Airflow UI
+    token = Variable.get("MOTHERDUCK_TOKEN")
+    os.environ["MOTHERDUCK_TOKEN"] = token
+
+    # connect via the md: alias
+    con = duckdb.connect("md:beer_etl")
+
+    # drop & recreate
+    con.execute(f"DROP TABLE IF EXISTS {table_name}")
+    con.register("df_styles", df)
+    con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df_styles")
+    con.close()
+    print(f"✅ Loaded {len(df)} rows into '{table_name}' on MotherDuck")
 
 ######################################################
 ## Load hop data from https://beermaverick.com      ##
 ######################################################
+
 def load_hops_to_duckdb(df, table_name="hops"):
     """
     Loads DataFrame into DuckDB after dropping existing table.
     """
-    db_path = os.path.abspath(os.path.join(os.getcwd(), "include/data/ingredients.duckdb"))
+    # Inject token from Airflow variable into env
+    token = Variable.get("MOTHERDUCK_TOKEN")
+    os.environ["MOTHERDUCK_TOKEN"] = token
 
-    # Ensure target directory exists
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-    con = duckdb.connect(db_path)
-
-    # Drop the table if it exists
+    # Use DuckDB cloud URI
+    con = duckdb.connect("md:beer_etl")  # or any other db name
     con.execute(f"DROP TABLE IF EXISTS {table_name}")
-
-    # Recreate and load data
+    con.register("df", df)
     con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df")
-
     con.close()
-    print(f"✅ Loaded {len(df)} rows into fresh '{table_name}' table at {db_path}")
+
+    print(f"✅ Loaded {len(df)} rows into fresh '{table_name}' table at {con}")
 
 
-######################################################
-## Load hop data from https://beermaverick.com      ##
-######################################################
+
+###############################################################
+## Load fermentables data from https://beermaverick.com      ##
+###############################################################
 def load_fermentables_to_duckdb(df, table_name="fermentables"):
     """
     Loads DataFrame into DuckDB after dropping existing table.
     """
-    db_path = os.path.abspath(os.path.join(os.getcwd(), "include/data/ingredients.duckdb"))
+    # Inject token from Airflow variable into env
+    token = Variable.get("MOTHERDUCK_TOKEN")
+    os.environ["MOTHERDUCK_TOKEN"] = token
 
-    # Ensure target directory exists
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-    con = duckdb.connect(db_path)
-
-    # Drop the table if it exists
+    # Use DuckDB cloud URI
+    con = duckdb.connect("md:beer_etl")  # or any other db name
     con.execute(f"DROP TABLE IF EXISTS {table_name}")
-
-    # Recreate and load data
+    con.register("df", df)
     con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df")
-
     con.close()
-    print(f"✅ Loaded {len(df)} rows into fresh '{table_name}' table at {db_path}")
+    
+    print(f"✅ Loaded {len(df)} rows into fresh '{table_name}' table at {con}")
 
 #########################################################
 ## Load yeasts data from https://beermaverick.com      ##
@@ -122,18 +140,15 @@ def load_yeasts_to_duckdb(df, table_name="yeasts"):
     """
     Loads DataFrame into DuckDB after dropping existing table.
     """
-    db_path = os.path.abspath(os.path.join(os.getcwd(), "include/data/ingredients.duckdb"))
+    # Inject token from Airflow variable into env
+    token = Variable.get("MOTHERDUCK_TOKEN")
+    os.environ["MOTHERDUCK_TOKEN"] = token
 
-    # Ensure target directory exists
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-    con = duckdb.connect(db_path)
-
-    # Drop the table if it exists
+    # Use DuckDB cloud URI
+    con = duckdb.connect("md:beer_etl")  # or any other db name
     con.execute(f"DROP TABLE IF EXISTS {table_name}")
-
-    # Recreate and load data
+    con.register("df", df)
     con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df")
-
     con.close()
-    print(f"✅ Loaded {len(df)} rows into fresh '{table_name}' table at {db_path}")
+    
+    print(f"✅ Loaded {len(df)} rows into fresh '{table_name}' table at {con}")

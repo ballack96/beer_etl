@@ -5,7 +5,7 @@ import pandas as pd
 
 # Saved modules
 from include.etl.extract import fetch_fermentables  # reuse for now
-from include.etl.transform import transform_hop_data  # reuse for now
+from include.etl.transform import transform_fermentables_data  # reuse for now
 from include.etl.load import load_fermentables_to_duckdb  # reuse loader
 
 default_args = {
@@ -26,7 +26,7 @@ def transform_fermentables(**context):
     print("🧪 Transforming hop data...")
     raw_dict = context['ti'].xcom_pull(task_ids='extract_fermentables', key='raw_fermentables_df')
     df = pd.DataFrame(raw_dict)
-    df = transform_hop_data(df)
+    df = transform_fermentables_data(df)
     print(f"✅ Transformed {len(df)} fermentables")
     context['ti'].xcom_push(key='clean_fermentables_df', value=df.to_dict(orient='records'))
 
@@ -42,7 +42,7 @@ with DAG(
     default_args=default_args,
     schedule_interval=None,
     catchup=False,
-    tags=["fermentables", "etl", "duckdb"],
+    tags=["fermentables", "etl", "motherduck"],
 ) as dag:
 
     t1 = PythonOperator(

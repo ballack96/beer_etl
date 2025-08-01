@@ -41,6 +41,60 @@ def transform_beer_data():
     print(f"Transformed {len(transformed)} records saved to {output_file}")
 
 ######################################################
+## Transform Beer style data from BJCP              ##
+######################################################
+def transform_styles_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensures all expected columns exist, splits numeric ranges,
+    normalizes categories, and converts list-fields.
+    """
+    df = df.copy()
+
+    # 3) Define all of the keys you care about
+    all_keys = [
+        'name', 'number', 'category', 'categorynumber',
+        'overallimpression', 'aroma', 'appearance', 'flavor',
+        'mouthfeel', 'comments', 'history', 'characteristicingredients',
+        'stylecomparison', 'ibumin', 'ibumax', 'ogmin', 'ogmax',
+        'fgmin', 'fgmax', 'abvmin', 'abvmax', 'srmmin', 'srmmax',
+        'commercialexamples', 'tags', 'entryinstructions',
+        'currentlydefinedtypes', 'strengthclassifications'
+    ]
+
+    # 4) Make sure every column exists
+    for key in all_keys:
+        if key not in df.columns:
+            df[key] = pd.NA
+
+    # 5) Split into numeric vs string fields
+    numeric_keys = [
+        'ibumin', 'ibumax', 'ogmin', 'ogmax',
+        'fgmin', 'fgmax', 'abvmin', 'abvmax',
+        'srmmin', 'srmmax'
+    ]
+    string_keys = [k for k in all_keys if k not in numeric_keys]
+
+    # fill missing strings with empty str
+    df[string_keys] = df[string_keys].fillna("")
+
+    # for numeric, replace missing with None, then convert to nullable Float64
+    for k in numeric_keys:
+        df[k] = df[k].where(df[k].notna(), None).astype("Float64")
+
+    # 6) Normalize “Ipa” → “Indian Pale Ale”
+    df['category'] = df['category'].replace({'Ipa': 'Indian Pale Ale'})
+
+    # 7) Split comma-separated fields into Python lists
+    def split_list(cell: str) -> list[str]:
+        return [s.strip() for s in cell.split(',')] if cell else []
+
+    for col in ['commercialexamples', 'tags']:
+        df[col] = df[col].apply(split_list)
+
+    return df
+
+
+######################################################
 ## Transform hop data from https://beermaverick.com ##
 ######################################################
 def extract_numeric_range_avg(value):
@@ -145,20 +199,36 @@ def transform_yeast_data(df):
     Transforms raw yeast data into clean schema
     """
     df = df.copy()
+    
+    df = df.rename(columns={
+        "name": "yeast_name",
+        "url": "detail_url",
+        "type": "type",
+        "attenuation": "attenuation",
+        "alcohol_tolerance": "alcohol_tolerance",
+        "flocculation": "flocculation"
+    })
 
-    def extract_abv_range(val):
-        if pd.isna(val):
-            return None, None
-        match = re.search(r'(\d+(\.\d+)?)\s*-\s*(\d+(\.\d+)?)\s*%', val)
-        if match:
-            return float(match.group(1)), float(match.group(3))
-        return None, None
-
-    df[['min_abv', 'max_abv']] = df['abv'].apply(
-        lambda x: pd.Series(extract_abv_range(x))
+     # 1. Split attenuation range
+    def parse_pct_range(s):
+        match = re.search(r"(\d+)-(\d+)", s or "")
+        return (int(match.group(1)), int(match.group(2))) if match else (None, None)
+    df[["min_attenuation", "max_attenuation"]] = df["attenuation"].apply(
+        lambda s: pd.Series(parse_pct_range(s))
     )
-
-    df.replace("Unknown", None, inplace=True)
-    df.replace("", None, inplace=True)
+    
+    # 2. Split tolerance range or map textual
+    df["alcohol_tolerance"] = df["alcohol_tolerance"].str.replace("%","", regex=False)
+    df[["min_tol", "max_tol"]] = df["alcohol_tolerance"].apply(
+        lambda s: pd.Series(parse_pct_range(s)) 
+        if "-" in (s or "") else pd.Series([None, None])
+    )
+    
+    # 3. Flocculation scoring
+    score_map = {"Low":1, "Medium-Low":2, "Medium":3, "High":4}
+    df["flocculation_score"] = df["flocculation"].map(score_map).fillna(0).astype(int)
+    
+    # 4. Drop originals if desired
+    df = df.drop(columns=["attenuation", "alcohol_tolerance"])
 
     return df
