@@ -68,6 +68,26 @@ def load_to_duckdb_original():
 
     print(f"Loaded {len(df)} records into DuckDB and saved Parquet at {parquet_file}")
 
+##################################################################
+## Load recipe list from  https://www.brewersfriend.com         ##
+##################################################################
+def load_clone_recipes_to_duckdb(df, table_name="clone_recipes"):
+    """
+    Pushes the cleaned clone-recipes DataFrame into DuckDB Cloud (MotherDuck).
+    """
+    # 1) Grab your MotherDuck token from the Airflow UI
+    token = Variable.get("MOTHERDUCK_TOKEN")
+    os.environ["MOTHERDUCK_TOKEN"] = token
+
+    # 2) Connect via the md: alias and write
+    con = duckdb.connect("md:beer_etl")
+    con.execute(f"DROP TABLE IF EXISTS {table_name}")
+    con.register("df", df)
+    con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df")
+    con.close()
+
+    print(f"✅ Loaded {len(df)} rows into '{table_name}' on MotherDuck")
+
 ######################################################
 ## Load styles data from BJCP                       ##
 ######################################################

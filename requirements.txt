@@ -7,3 +7,4 @@ textblob
 geopy
 aiohttp 
 nest_asyncio
+urllib3

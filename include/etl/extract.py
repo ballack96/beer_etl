@@ -7,39 +7,90 @@ import pandas as pd
 import time
 import asyncio
 import aiohttp
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import time
+import random
 
-######################################################
-## Beer data from catalog.beer                      ##
-######################################################
-def extract_beer_data():
-    base_url = "https://api.catalog.beer/brewer"
-    breweries = []
-    page = 1
-    per_page = 50
+###########################################################
+## Clone recipe data from https://www.brewersfriend.com  ##
+###########################################################
+BASE = "https://www.brewersfriend.com"
+URL_TPL = BASE + "/homebrew-recipes/page/{page}/"
 
-    while True:
-        response = requests.get(base_url, params={"page": page, "per_page": per_page})
-        if response.status_code != 200:
-            raise Exception(f"Failed on page {page} with status code {response.status_code}")
+def parse_views(v: str) -> int:
+    """
+    Turns strings like '1.2K', '3,456', '2M' into integer view-counts.
+    """
+    v = v.strip().upper()
+    if v.endswith("K"):
+        return int(float(v.rstrip("K")) * 1_000)
+    if v.endswith("M"):
+        return int(float(v.rstrip("M")) * 1_000_000)
+    return int(v.replace(",", ""))
 
-        data = response.json()
-        breweries.extend(data["data"])
+def fetch_clone_recipes(max_pages: int = 30) -> pd.DataFrame:    
+    """
+    Scrape up to `max_pages` pages of BrewersFriend clone recipes and return a DataFrame.
+    """
+    session = requests.Session()
+    retry = Retry(
+        total=5,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    session.mount("http://", HTTPAdapter(max_retries=retry))
 
-        if page >= data["pagination"]["last_visible_page"]:
+    all_data = []
+
+    for page in range(1, max_pages + 1):
+        url = URL_TPL.format(page=page)
+        time.sleep(random.uniform(1.0, 3.0))  # polite pacing
+
+        resp = session.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code != 200:
+            print(f"Stopping early: page {page} → {resp.status_code}")
             break
 
-        page += 1
+        soup  = BeautifulSoup(resp.text, "html.parser")
+        table = soup.find("table", class_="ui table")
+        if not table:
+            print(f"No table on page {page}, stopping.")
+            break
 
-    # Fixed path - removed "beer_etl_project/" prefix
-    output_path = Path("include/data/raw")
-    output_path.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = output_path / f"catalog_breweries_{timestamp}.json"
+        rows = table.find_all("tr", class_=["odd", "even"])
+        if not rows:
+            print(f"No data rows on page {page}, stopping.")
+            break
 
-    with open(output_file, "w") as f:
-        json.dump(breweries, f, indent=2)
+        for tr in rows:
+            tds   = tr.find_all("td", recursive=False)
+            title = tds[0].find("a", class_="recipetitle").get_text(strip=True)
+            # -- only keep clone recipes --
+            if "clone" not in title.lower():
+                continue
 
-    print(f"✅ Extracted {len(breweries)} breweries from catalog.beer to {output_file}")
+            all_data.append({
+                "page":   page,
+                "title":  title,
+                "url":    BASE + tds[0].find("a", class_="recipetitle")["href"],
+                "style":  tds[1].get_text(strip=True),
+                "batch_size":   tds[2].get_text(strip=True),
+                "og":     tds[3].get_text(strip=True),
+                "fg":     tds[4].get_text(strip=True),
+                "abv":    tds[5].get_text(strip=True),
+                "ibu":    tds[6].get_text(strip=True),
+                "color":  tds[7].get_text(strip=True),
+                "views":  parse_views(tds[8].get_text(strip=True)),
+                "brewed": tds[9].get_text(strip=True)
+            })
+
+        print(f"Page {page} scraped ({len(rows)} recipes), total so far: {len(all_data)}")
+
+    df = pd.DataFrame(all_data)
+    return df
 
 ######################################################
 ## Beer style data from BJCP                        ##

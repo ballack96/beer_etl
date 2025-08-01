@@ -5,40 +5,54 @@ from textblob import TextBlob
 import pandas as pd
 import re
 
-def transform_beer_data():
-    # Fixed paths - removed "beer_etl_project/" prefix
-    raw_path = Path("include/data/raw")
-    processed_path = Path("include/data/processed")
-    processed_path.mkdir(parents=True, exist_ok=True)
+#####################################################################
+## Transform clone recipe list from https://www.brewersfriend.com  ##
+#####################################################################
+def transform_clone_recipes_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Cleans and types the raw clone-recipes DataFrame.
+    """
+    df = df.copy()
 
-    json_files = sorted(raw_path.glob("beer_styles_*.json"), reverse=True)
-    if not json_files:
-        print("No raw data files found.")
-        return
+    # 1) Strip whitespace
+    for col in ['title','url','style','batch_size','og','fg','abv','ibu','color','brewed']:
+        df[col] = df[col].astype(str).str.strip()
 
-    latest_file = json_files[0]
-    with open(latest_file, "r") as f:
-        beer_styles = json.load(f)
+    # 2) Drop duplicate URLs
+    df = df.drop_duplicates(subset=['url']).reset_index(drop=True)
 
-    transformed = []
+    # 3) Parse batch_size into qty + unit
+    def parse_size(s):
+        m = re.match(r'(\d+(\.\d+)?)\s*([A-Za-z]+)', s)
+        return (float(m.group(1)), m.group(3).lower()) if m else (None, None)
+    df[['batch_qty','batch_unit']] = df['batch_size'].apply(
+        lambda s: pd.Series(parse_size(s))
+    )
 
-    for item in beer_styles:
-        sentiment_score = TextBlob(item["name"]).sentiment.polarity
-        transformed.append({
-            "style_name": item["name"],
-            "avg_rating": float(item["avg_rating"]) if item["avg_rating"] else None,
-            "min_abv": float(item["min_abv"].replace("%", "")) if item["min_abv"] else None,
-            "max_abv": float(item["max_abv"].replace("%", "")) if item["max_abv"] else None,
-            "num_beers": int(item["num_beers"].replace(",", "")) if item["num_beers"] else None,
-            "sentiment": sentiment_score
-        })
+    # 4) Numeric casts
+    df['og']  = pd.to_numeric(df['og'], errors='coerce')
+    df['fg']  = pd.to_numeric(df['fg'], errors='coerce')
+    df['abv'] = df['abv'].str.replace('%','',regex=False).astype(float, errors='ignore')
+    df['ibu'] = pd.to_numeric(df['ibu'], errors='coerce')
+    df['color'] = pd.to_numeric(df['color'], errors='coerce')
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = processed_path / f"beer_styles_transformed_{timestamp}.json"
-    with open(output_file, "w") as f:
-        json.dump(transformed, f, indent=2)
+    # 5) Parse brewed date
+    def parse_date(s):
+        for fmt in ("%Y-%m-%d","%b %d, %Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except:
+                continue
+        return None
+    df['brewed_date'] = df['brewed'].apply(parse_date)
 
-    print(f"Transformed {len(transformed)} records saved to {output_file}")
+    # 6) Normalize style (Title Case)
+    df['style'] = df['style'].str.title()
+
+    # 7) Derive a slug
+    df['slug'] = df['url'].str.rstrip('/').str.extract(r'/([^/]+)$')[0]
+
+    return df
 
 ######################################################
 ## Transform Beer style data from BJCP              ##
