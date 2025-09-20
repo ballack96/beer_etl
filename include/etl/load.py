@@ -172,3 +172,45 @@ def load_yeasts_to_duckdb(df, table_name="yeasts"):
     con.close()
     
     print(f"✅ Loaded {len(df)} rows into fresh '{table_name}' table at {con}")
+
+
+#########################################################
+## Load BeerXML recipe data to DuckDB Cloud           ##
+#########################################################
+def load_beerxml_to_duckdb(df, table_name="beerxml_recipes"):
+    """
+    Loads the transformed BeerXML recipe DataFrame into DuckDB Cloud via MotherDuck.
+    Uses the MOTHERDUCK_TOKEN stored in Airflow Variables.
+    
+    Args:
+        df: Transformed BeerXML recipe DataFrame
+        table_name: Name of the table to create in DuckDB
+    """
+    # Inject token from Airflow variable into env
+    token = Variable.get("MOTHERDUCK_TOKEN")
+    os.environ["MOTHERDUCK_TOKEN"] = token
+
+    # Use DuckDB cloud URI
+    con = duckdb.connect("md:beer_etl")
+    
+    # Drop existing table if it exists
+    con.execute(f"DROP TABLE IF EXISTS {table_name}")
+    
+    # Register DataFrame and create table
+    con.register("df_beerxml", df)
+    con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df_beerxml")
+    
+    # Create indexes for better query performance
+    try:
+        con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_recipe_name ON {table_name}(recipe_name)")
+        con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_brewer ON {table_name}(brewer)")
+        con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_style_name ON {table_name}(style_name)")
+        con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_recipe_type ON {table_name}(recipe_type)")
+        con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_created_year ON {table_name}(created_year)")
+        print(f"✅ Created indexes for {table_name}")
+    except Exception as e:
+        print(f"⚠️ Could not create indexes for {table_name}: {e}")
+    
+    con.close()
+    
+    print(f"✅ Loaded {len(df)} BeerXML recipe rows into fresh '{table_name}' table on MotherDuck")

@@ -11,6 +11,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
 import random
+import boto3
+import xml.etree.ElementTree as ET
+from typing import List, Dict
+from airflow.hooks.base import BaseHook
 
 ###########################################################
 ## Clone recipe data from https://www.brewersfriend.com  ##
@@ -421,3 +425,224 @@ async def fetch_yeasts_async():
 
 def fetch_yeasts_data():
     return asyncio.run(fetch_yeasts_async())
+
+
+#########################################################
+## Extract BeerXML files from S3 bucket               ##
+#########################################################
+def fetch_beerxml_from_s3(bucket_name: str = "beer-etl", prefix: str = "raw-clone-recipes/clone-recipes/", connection_id: str = "aws-s3-user") -> List[Dict]:
+    """
+    Fetches BeerXML files from S3 bucket and extracts recipe data.
+    
+    Args:
+        bucket_name: S3 bucket name (default: "beer-etl")
+        prefix: S3 prefix for BeerXML files (default: "raw-clone-recipes/clone-recipes/")
+        connection_id: Airflow connection ID for AWS credentials (default: "aws-s3-user")
+    
+    Returns:
+        List of dictionaries containing parsed BeerXML recipe data
+    """
+    # Get AWS connection from Airflow
+    try:
+        aws_connection = BaseHook.get_connection(connection_id)
+        print(f"✅ Successfully retrieved AWS connection: {connection_id}")
+    except Exception as e:
+        print(f"❌ Failed to retrieve AWS connection '{connection_id}': {str(e)}")
+        raise
+    
+    # Extract credentials from connection
+    aws_access_key_id = aws_connection.login
+    aws_secret_access_key = aws_connection.password
+    region_name = aws_connection.extra_dejson.get('region_name', 'us-east-1')
+    
+    # Validate credentials
+    if not aws_access_key_id or not aws_secret_access_key:
+        raise ValueError(f"❌ Missing AWS credentials in connection '{connection_id}'. Please check Login (Access Key ID) and Password (Secret Access Key) fields.")
+    
+    print(f"🔑 Using AWS region: {region_name}")
+    
+    # Initialize S3 client with Airflow connection credentials
+    try:
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            region_name=region_name
+        )
+        print(f"✅ Successfully initialized S3 client")
+    except Exception as e:
+        print(f"❌ Failed to initialize S3 client: {str(e)}")
+        raise
+    
+    recipes_data = []
+    
+    try:
+        # List all objects in the S3 bucket with the given prefix
+        paginator = s3_client.get_paginator('list_objects_v2')
+        page_iterator = paginator.paginate(Bucket=bucket_name, Prefix=prefix)
+        
+        for page in page_iterator:
+            if 'Contents' not in page:
+                continue
+                
+            for obj in page['Contents']:
+                # Only process .xml files
+                if obj['Key'].endswith('.xml'):
+                    print(f"Processing BeerXML file: {obj['Key']}")
+                    
+                    try:
+                        # Download the XML content
+                        response = s3_client.get_object(Bucket=bucket_name, Key=obj['Key'])
+                        xml_content = response['Body'].read().decode('utf-8')
+                        
+                        # Parse the BeerXML and extract recipe data
+                        recipe_data = parse_beerxml_content(xml_content, obj['Key'])
+                        
+                        if recipe_data:
+                            recipes_data.extend(recipe_data)
+                            
+                    except Exception as e:
+                        print(f"Error processing {obj['Key']}: {str(e)}")
+                        continue
+    
+    except Exception as e:
+        print(f"Error accessing S3 bucket: {str(e)}")
+        raise
+    
+    print(f"Successfully extracted {len(recipes_data)} recipes from BeerXML files")
+    return recipes_data
+
+
+def parse_beerxml_content(xml_content: str, file_key: str) -> List[Dict]:
+    """
+    Parse BeerXML content and extract recipe information.
+    
+    Args:
+        xml_content: Raw XML content as string
+        file_key: S3 object key for reference
+    
+    Returns:
+        List of recipe dictionaries
+    """
+    recipes = []
+    
+    try:
+        # Parse XML
+        root = ET.fromstring(xml_content)
+        
+        # Handle BeerXML namespace
+        namespace = {'beerxml': 'http://www.beerxml.com/beerxml_0.9'}
+        
+        # Find all recipe elements
+        recipe_elements = root.findall('.//beerxml:RECIPE', namespace) or root.findall('.//RECIPE')
+        
+        for recipe_elem in recipe_elements:
+            recipe_data = extract_recipe_data(recipe_elem, file_key, namespace)
+            if recipe_data:
+                recipes.append(recipe_data)
+                
+    except ET.ParseError as e:
+        print(f"XML parsing error for {file_key}: {str(e)}")
+    except Exception as e:
+        print(f"Error parsing BeerXML content for {file_key}: {str(e)}")
+    
+    return recipes
+
+
+def extract_recipe_data(recipe_elem, file_key: str, namespace: Dict) -> Dict:
+    """
+    Extract recipe data from a BeerXML RECIPE element.
+    
+    Args:
+        recipe_elem: XML element containing recipe data
+        file_key: S3 object key for reference
+        namespace: XML namespace mapping
+    
+    Returns:
+        Dictionary containing extracted recipe data
+    """
+    try:
+        # Helper function to safely get text content
+        def get_text(elem, xpath, default=None):
+            try:
+                if namespace:
+                    found = elem.find(xpath, namespace)
+                else:
+                    found = elem.find(xpath)
+                return found.text if found is not None and found.text else default
+            except:
+                return default
+        
+        # Helper function to get numeric value
+        def get_numeric(elem, xpath, default=None):
+            try:
+                text = get_text(elem, xpath, default)
+                if text and text != default:
+                    return float(text)
+                return default
+            except:
+                return default
+        
+        # Extract basic recipe information
+        recipe_data = {
+            'file_key': file_key,
+            'recipe_name': get_text(recipe_elem, 'beerxml:NAME') or get_text(recipe_elem, 'NAME', ''),
+            'recipe_type': get_text(recipe_elem, 'beerxml:TYPE') or get_text(recipe_elem, 'TYPE', ''),
+            'brewer': get_text(recipe_elem, 'beerxml:BREWER') or get_text(recipe_elem, 'BREWER', ''),
+            'batch_size': get_numeric(recipe_elem, 'beerxml:BATCH_SIZE') or get_numeric(recipe_elem, 'BATCH_SIZE'),
+            'boil_size': get_numeric(recipe_elem, 'beerxml:BOIL_SIZE') or get_numeric(recipe_elem, 'BOIL_SIZE'),
+            'boil_time': get_numeric(recipe_elem, 'beerxml:BOIL_TIME') or get_numeric(recipe_elem, 'BOIL_TIME'),
+            'efficiency': get_numeric(recipe_elem, 'beerxml:EFFICIENCY') or get_numeric(recipe_elem, 'EFFICIENCY'),
+            'created_date': get_text(recipe_elem, 'beerxml:DATE') or get_text(recipe_elem, 'DATE', ''),
+            'notes': get_text(recipe_elem, 'beerxml:NOTES') or get_text(recipe_elem, 'NOTES', ''),
+        }
+        
+        # Extract style information
+        style_elem = recipe_elem.find('beerxml:STYLE', namespace) or recipe_elem.find('STYLE')
+        if style_elem is not None:
+            recipe_data.update({
+                'style_name': get_text(style_elem, 'beerxml:NAME') or get_text(style_elem, 'NAME', ''),
+                'style_category': get_text(style_elem, 'beerxml:CATEGORY') or get_text(style_elem, 'CATEGORY', ''),
+                'style_og_min': get_numeric(style_elem, 'beerxml:OG_MIN') or get_numeric(style_elem, 'OG_MIN'),
+                'style_og_max': get_numeric(style_elem, 'beerxml:OG_MAX') or get_numeric(style_elem, 'OG_MAX'),
+                'style_fg_min': get_numeric(style_elem, 'beerxml:FG_MIN') or get_numeric(style_elem, 'FG_MIN'),
+                'style_fg_max': get_numeric(style_elem, 'beerxml:FG_MAX') or get_numeric(style_elem, 'FG_MAX'),
+                'style_abv_min': get_numeric(style_elem, 'beerxml:ABV_MIN') or get_numeric(style_elem, 'ABV_MIN'),
+                'style_abv_max': get_numeric(style_elem, 'beerxml:ABV_MAX') or get_numeric(style_elem, 'ABV_MAX'),
+                'style_ibu_min': get_numeric(style_elem, 'beerxml:IBU_MIN') or get_numeric(style_elem, 'IBU_MIN'),
+                'style_ibu_max': get_numeric(style_elem, 'beerxml:IBU_MAX') or get_numeric(style_elem, 'IBU_MAX'),
+                'style_color_min': get_numeric(style_elem, 'beerxml:COLOR_MIN') or get_numeric(style_elem, 'COLOR_MIN'),
+                'style_color_max': get_numeric(style_elem, 'beerxml:COLOR_MAX') or get_numeric(style_elem, 'COLOR_MAX'),
+            })
+        
+        # Extract calculated values
+        recipe_data.update({
+            'calculated_og': get_numeric(recipe_elem, 'beerxml:OG') or get_numeric(recipe_elem, 'OG'),
+            'calculated_fg': get_numeric(recipe_elem, 'beerxml:FG') or get_numeric(recipe_elem, 'FG'),
+            'calculated_abv': get_numeric(recipe_elem, 'beerxml:ABV') or get_numeric(recipe_elem, 'ABV'),
+            'calculated_ibu': get_numeric(recipe_elem, 'beerxml:IBU') or get_numeric(recipe_elem, 'IBU'),
+            'calculated_color': get_numeric(recipe_elem, 'beerxml:COLOR') or get_numeric(recipe_elem, 'COLOR'),
+        })
+        
+        # Count ingredients
+        hops_count = len(recipe_elem.findall('beerxml:HOPS/beerxml:HOP', namespace) or 
+                        recipe_elem.findall('HOPS/HOP', []) or 
+                        recipe_elem.findall('HOPS', []) or [])
+        fermentables_count = len(recipe_elem.findall('beerxml:FERMENTABLES/beerxml:FERMENTABLE', namespace) or 
+                               recipe_elem.findall('FERMENTABLES/FERMENTABLE', []) or 
+                               recipe_elem.findall('FERMENTABLES', []) or [])
+        yeasts_count = len(recipe_elem.findall('beerxml:YEASTS/beerxml:YEAST', namespace) or 
+                          recipe_elem.findall('YEASTS/YEAST', []) or 
+                          recipe_elem.findall('YEASTS', []) or [])
+        
+        recipe_data.update({
+            'hops_count': hops_count,
+            'fermentables_count': fermentables_count,
+            'yeasts_count': yeasts_count,
+        })
+        
+        return recipe_data
+        
+    except Exception as e:
+        print(f"Error extracting recipe data: {str(e)}")
+        return None

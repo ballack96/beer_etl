@@ -246,3 +246,196 @@ def transform_yeast_data(df):
     df = df.drop(columns=["attenuation", "alcohol_tolerance"])
 
     return df
+
+
+#########################################################
+## Transform BeerXML recipe data from S3              ##
+#########################################################
+def transform_beerxml_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms raw BeerXML recipe data into clean, structured format.
+    
+    Args:
+        df: DataFrame containing raw BeerXML recipe data
+    
+    Returns:
+        Cleaned and transformed DataFrame
+    """
+    df = df.copy()
+    
+    # 1) Clean and standardize string fields
+    string_columns = [
+        'recipe_name', 'recipe_type', 'brewer', 'style_name', 'style_category',
+        'created_date', 'notes', 'file_key'
+    ]
+    
+    for col in string_columns:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+            df[col] = df[col].replace('nan', '').replace('None', '')
+    
+    # 2) Parse and clean date fields
+    if 'created_date' in df.columns:
+        df['created_date_parsed'] = df['created_date'].apply(parse_beerxml_date)
+        df['created_year'] = df['created_date_parsed'].dt.year
+        df['created_month'] = df['created_date_parsed'].dt.month
+    
+    # 3) Clean numeric fields and handle missing values
+    numeric_columns = [
+        'batch_size', 'boil_size', 'boil_time', 'efficiency',
+        'calculated_og', 'calculated_fg', 'calculated_abv', 
+        'calculated_ibu', 'calculated_color',
+        'style_og_min', 'style_og_max', 'style_fg_min', 'style_fg_max',
+        'style_abv_min', 'style_abv_max', 'style_ibu_min', 'style_ibu_max',
+        'style_color_min', 'style_color_max',
+        'hops_count', 'fermentables_count', 'yeasts_count'
+    ]
+    
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # 4) Create derived fields
+    # Calculate ABV from OG and FG if not present
+    if 'calculated_abv' in df.columns and 'calculated_og' in df.columns and 'calculated_fg' in df.columns:
+        mask = df['calculated_abv'].isna() & df['calculated_og'].notna() & df['calculated_fg'].notna()
+        df.loc[mask, 'calculated_abv'] = (
+            (df.loc[mask, 'calculated_og'] - df.loc[mask, 'calculated_fg']) * 131.25
+        )
+    
+    # Create recipe complexity score based on ingredient counts
+    if all(col in df.columns for col in ['hops_count', 'fermentables_count', 'yeasts_count']):
+        df['complexity_score'] = (
+            df['hops_count'].fillna(0) + 
+            df['fermentables_count'].fillna(0) + 
+            df['yeasts_count'].fillna(0)
+        )
+    
+    # 5) Categorize recipe types
+    if 'recipe_type' in df.columns:
+        df['recipe_type_category'] = df['recipe_type'].apply(categorize_recipe_type)
+    
+    # 6) Style validation - check if calculated values fall within style guidelines
+    style_validation_cols = ['og_in_style_range', 'fg_in_style_range', 'abv_in_style_range', 
+                            'ibu_in_style_range', 'color_in_style_range']
+    
+    for col in style_validation_cols:
+        df[col] = False
+    
+    # OG validation
+    if all(col in df.columns for col in ['calculated_og', 'style_og_min', 'style_og_max']):
+        df['og_in_style_range'] = (
+            (df['calculated_og'] >= df['style_og_min']) & 
+            (df['calculated_og'] <= df['style_og_max'])
+        ).fillna(False)
+    
+    # FG validation
+    if all(col in df.columns for col in ['calculated_fg', 'style_fg_min', 'style_fg_max']):
+        df['fg_in_style_range'] = (
+            (df['calculated_fg'] >= df['style_fg_min']) & 
+            (df['calculated_fg'] <= df['style_fg_max'])
+        ).fillna(False)
+    
+    # ABV validation
+    if all(col in df.columns for col in ['calculated_abv', 'style_abv_min', 'style_abv_max']):
+        df['abv_in_style_range'] = (
+            (df['calculated_abv'] >= df['style_abv_min']) & 
+            (df['calculated_abv'] <= df['style_abv_max'])
+        ).fillna(False)
+    
+    # IBU validation
+    if all(col in df.columns for col in ['calculated_ibu', 'style_ibu_min', 'style_ibu_max']):
+        df['ibu_in_style_range'] = (
+            (df['calculated_ibu'] >= df['style_ibu_min']) & 
+            (df['calculated_ibu'] <= df['style_ibu_max'])
+        ).fillna(False)
+    
+    # Color validation
+    if all(col in df.columns for col in ['calculated_color', 'style_color_min', 'style_color_max']):
+        df['color_in_style_range'] = (
+            (df['calculated_color'] >= df['style_color_min']) & 
+            (df['calculated_color'] <= df['style_color_max'])
+        ).fillna(False)
+    
+    # Calculate overall style compliance score
+    style_cols = ['og_in_style_range', 'fg_in_style_range', 'abv_in_style_range', 
+                  'ibu_in_style_range', 'color_in_style_range']
+    df['style_compliance_score'] = df[style_cols].sum(axis=1) / len(style_cols)
+    
+    # 7) Create file metadata
+    if 'file_key' in df.columns:
+        df['source_file'] = df['file_key'].str.extract(r'/([^/]+\.xml)$')
+        df['source_directory'] = df['file_key'].str.extract(r'^([^/]+/[^/]+/)')
+    
+    # 8) Add processing timestamp
+    df['processed_at'] = datetime.now()
+    
+    # 9) Remove duplicates based on recipe name and brewer
+    df = df.drop_duplicates(subset=['recipe_name', 'brewer'], keep='first').reset_index(drop=True)
+    
+    return df
+
+
+def parse_beerxml_date(date_str: str) -> pd.Timestamp:
+    """
+    Parse various date formats found in BeerXML files.
+    
+    Args:
+        date_str: Date string from BeerXML
+    
+    Returns:
+        Parsed timestamp or NaT if parsing fails
+    """
+    if pd.isna(date_str) or date_str == '' or date_str == 'nan':
+        return pd.NaT
+    
+    # Common BeerXML date formats
+    formats = [
+        '%Y-%m-%d',           # 2023-01-15
+        '%m/%d/%Y',           # 01/15/2023
+        '%d/%m/%Y',           # 15/01/2023
+        '%Y-%m-%d %H:%M:%S',  # 2023-01-15 14:30:00
+        '%m/%d/%Y %H:%M:%S',  # 01/15/2023 14:30:00
+        '%Y%m%d',             # 20230115
+        '%B %d, %Y',          # January 15, 2023
+        '%b %d, %Y',          # Jan 15, 2023
+    ]
+    
+    for fmt in formats:
+        try:
+            return pd.to_datetime(date_str, format=fmt)
+        except:
+            continue
+    
+    # Try pandas automatic parsing as fallback
+    try:
+        return pd.to_datetime(date_str)
+    except:
+        return pd.NaT
+
+
+def categorize_recipe_type(recipe_type: str) -> str:
+    """
+    Categorize recipe types into broader categories.
+    
+    Args:
+        recipe_type: Original recipe type string
+    
+    Returns:
+        Categorized recipe type
+    """
+    if pd.isna(recipe_type) or recipe_type == '':
+        return 'Unknown'
+    
+    recipe_type = str(recipe_type).lower()
+    
+    if 'all grain' in recipe_type:
+        return 'All Grain'
+    elif 'extract' in recipe_type:
+        return 'Extract'
+    elif 'partial' in recipe_type or 'mini-mash' in recipe_type:
+        return 'Partial Mash'
+    elif 'mash' in recipe_type:
+        return 'Mash'
+    else:
+        return 'Other'
