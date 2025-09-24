@@ -499,6 +499,9 @@ def fetch_beerxml_from_s3(bucket_name: str = "beer-etl", prefix: str = "raw-clon
                         recipe_data = parse_beerxml_content(xml_content, obj['Key'])
                         
                         if recipe_data:
+                            # Add XML content to each recipe for flattening
+                            for recipe in recipe_data:
+                                recipe['xml_content'] = xml_content
                             recipes_data.extend(recipe_data)
                             
                     except Exception as e:

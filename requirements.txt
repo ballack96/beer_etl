@@ -9,3 +9,4 @@ aiohttp
 nest_asyncio
 urllib3
 boto3
+pymongo
