@@ -629,7 +629,20 @@ def extract_mash_profile(recipe_elem, namespace: Dict) -> Optional[Dict[str, Any
     
     for i, step_elem in enumerate(step_elements):
         step_name = get_text(step_elem, 'beerxml:NAME') or get_text(step_elem, 'NAME', f'Step {i+1}')
-        step_type = get_text(step_elem, 'beerxml:TYPE') or get_text(step_elem, 'TYPE', 'Infusion')
+        raw_step_type = get_text(step_elem, 'beerxml:TYPE') or get_text(step_elem, 'TYPE', 'Infusion')
+        
+        # Map BeerXML step types to schema-compliant types
+        step_type_mapping = {
+            'Strike': 'Infusion',
+            'Infusion': 'Infusion',
+            'Temperature': 'Temperature', 
+            'Decoction': 'Decoction',
+            'Mash In': 'Infusion',
+            'Mash Out': 'Temperature',
+            'Sparge': 'Infusion'
+        }
+        step_type = step_type_mapping.get(raw_step_type, 'Infusion')
+        
         step_temp = get_numeric(step_elem, 'beerxml:STEP_TEMP') or get_numeric(step_elem, 'STEP_TEMP', 0)
         step_time = get_numeric(step_elem, 'beerxml:STEP_TIME') or get_numeric(step_elem, 'STEP_TIME', 0)
         infuse_amount = get_numeric(step_elem, 'beerxml:INFUSE_AMOUNT') or get_numeric(step_elem, 'INFUSE_AMOUNT')
