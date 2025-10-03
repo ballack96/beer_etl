@@ -1,11 +1,83 @@
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 import hashlib
 import json
+import pytz
+from bson import ObjectId
 
 
-def flatten_beerxml_to_json(xml_content: str, file_key: str, org_id: str = "brewlytix") -> List[Dict[str, Any]]:
+def get_timezone_aware_datetime(timezone_name: str = "UTC") -> datetime:
+    """
+    Get a timezone-aware datetime object for MongoDB.
+    
+    Args:
+        timezone_name: Timezone name (default: UTC)
+    
+    Returns:
+        Timezone-aware datetime object
+    """
+    try:
+        tz = pytz.timezone(timezone_name)
+        return datetime.now(tz)
+    except Exception:
+        # Fallback to UTC if timezone is invalid
+        return datetime.now(timezone.utc)
+
+
+def generate_recipe_hash(recipe_data: Dict[str, Any]) -> str:
+    """
+    Generate a hash for duplicate detection based on recipe content.
+    
+    Args:
+        recipe_data: Recipe dictionary
+    
+    Returns:
+        SHA256 hash of recipe content
+    """
+    # Helper function to safely convert values to strings
+    def safe_str(value):
+        if value is None:
+            return ''
+        return str(value)
+    
+    # Create a stable hash based on key recipe fields
+    content_fields = [
+        safe_str(recipe_data.get('name', '')),
+        safe_str(recipe_data.get('brewer', '')),
+        safe_str(recipe_data.get('type', '')),
+        safe_str(recipe_data.get('version', 1)),
+        safe_str(recipe_data.get('batch', {}).get('target_volume_L', '')),
+        safe_str(recipe_data.get('batch', {}).get('boil_time_min', '')),
+    ]
+    
+    # Add fermentables, hops, and yeasts to hash
+    for fermentable in recipe_data.get('fermentables', []):
+        if isinstance(fermentable, dict):
+            name = safe_str(fermentable.get('name', ''))
+            amount = safe_str(fermentable.get('amount_g', ''))
+            content_fields.append(f"{name}_{amount}")
+    
+    for hop in recipe_data.get('hops', []):
+        if isinstance(hop, dict):
+            name = safe_str(hop.get('name', ''))
+            amount = safe_str(hop.get('amount_g', ''))
+            use = safe_str(hop.get('use', ''))
+            content_fields.append(f"{name}_{amount}_{use}")
+    
+    for yeast in recipe_data.get('yeasts', []):
+        if isinstance(yeast, dict):
+            name = safe_str(yeast.get('name', ''))
+            y_type = safe_str(yeast.get('type', ''))
+            content_fields.append(f"{name}_{y_type}")
+    
+    # Filter out empty strings and join
+    content_fields = [field for field in content_fields if field.strip()]
+    content_string = "|".join(content_fields)
+    return hashlib.sha256(content_string.encode()).hexdigest()
+
+
+def flatten_beerxml_to_json(xml_content: str, file_key: str, org_id: str = "brewlytix", timezone_name: str = "UTC") -> List[Dict[str, Any]]:
     """
     Flatten BeerXML content to JSON format matching the MongoDB schema.
     
@@ -30,7 +102,7 @@ def flatten_beerxml_to_json(xml_content: str, file_key: str, org_id: str = "brew
         recipe_elements = root.findall('.//beerxml:RECIPE', namespace) or root.findall('.//RECIPE')
         
         for recipe_elem in recipe_elements:
-            recipe_data = flatten_recipe_element(recipe_elem, file_key, org_id, namespace)
+            recipe_data = flatten_recipe_element(recipe_elem, file_key, org_id, namespace, timezone_name)
             if recipe_data:
                 recipes.append(recipe_data)
                 
@@ -42,7 +114,7 @@ def flatten_beerxml_to_json(xml_content: str, file_key: str, org_id: str = "brew
     return recipes
 
 
-def flatten_recipe_element(recipe_elem, file_key: str, org_id: str, namespace: Dict) -> Optional[Dict[str, Any]]:
+def flatten_recipe_element(recipe_elem, file_key: str, org_id: str, namespace: Dict, timezone_name: str = "UTC") -> Optional[Dict[str, Any]]:
     """
     Flatten a single BeerXML RECIPE element to match MongoDB schema.
     
@@ -136,20 +208,20 @@ def flatten_recipe_element(recipe_elem, file_key: str, org_id: str, namespace: D
         estimates = extract_estimates(recipe_elem, namespace)
         instructions = extract_instructions(recipe_elem, namespace)
         
-        # Create provenance data
+        # Create provenance data with timezone-aware datetime
         provenance = {
             "beerxml_version": 1,
             "source_uri": f"s3://beer-etl/{file_key}",
             "source_record_id": hashlib.sha256(f"{file_key}_{recipe_name}".encode()).hexdigest()[:24],
-            "imported_at": datetime.now().isoformat(),
+            "imported_at": get_timezone_aware_datetime(timezone_name),
             "original_xml_fragment": ET.tostring(recipe_elem, encoding='unicode')[:1000],  # Truncated for storage
             "checksum_sha256": hashlib.sha256(ET.tostring(recipe_elem, encoding='unicode').encode()).hexdigest()
         }
         
-        # Create audit data
+        # Create audit data with timezone-aware datetime
         audit = {
             "created_by": "beerxml_etl",
-            "created_at": datetime.now().isoformat(),
+            "created_at": get_timezone_aware_datetime(timezone_name),
             "updated_at": None
         }
         
@@ -181,6 +253,13 @@ def flatten_recipe_element(recipe_elem, file_key: str, org_id: str, namespace: D
             "ai": None,  # Empty for now
             "audit": audit
         }
+        
+        # Generate content hash for duplicate detection
+        try:
+            recipe_doc["content_hash"] = generate_recipe_hash(recipe_doc)
+        except Exception as e:
+            print(f"⚠️ Warning: Could not generate content hash for recipe {recipe_name}: {str(e)}")
+            recipe_doc["content_hash"] = None
         
         return recipe_doc
         
@@ -713,7 +792,7 @@ def extract_estimates(recipe_elem, namespace: Dict) -> Optional[Dict[str, Any]]:
     og = get_numeric_value(recipe_elem, 'beerxml:OG') or get_numeric_value(recipe_elem, 'OG')
     fg = get_numeric_value(recipe_elem, 'beerxml:FG') or get_numeric_value(recipe_elem, 'FG')
     ibu = get_numeric_value(recipe_elem, 'beerxml:IBU') or get_numeric_value(recipe_elem, 'IBU')
-    color = get_numeric_value(recipe_elem, 'beerxml:COLOR') or get_numeric_value(recipe_elem, 'COLOR')
+    color = get_numeric_value(recipe_elem, 'beerxml:EST_COLOR') or get_numeric_value(recipe_elem, 'EST_COLOR')
     abv = get_numeric_value(recipe_elem, 'beerxml:ABV') or get_numeric_value(recipe_elem, 'ABV')
     
     # Calculate ABV if not present
